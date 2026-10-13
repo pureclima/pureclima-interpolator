@@ -45,6 +45,18 @@ const CATEGORIES = {
   },
 };
 
+/* ── Flow units ──
+   Data is always stored in l/s. The display unit only changes what the user
+   sees and types, so switching units converts existing points automatically. */
+const FLOW_UNITS = {
+  ls: { label: 'l/s', factor: 1 },
+  m3h: { label: 'm³/h', factor: 3.6 }, // 1 l/s = 3.6 m³/h
+};
+const isFlowLabel = (label) => label.includes('(l/s)');
+const unitLabel = (label, unit) => label.replace('(l/s)', `(${FLOW_UNITS[unit].label})`);
+const toDisplay = (value, label, unit) => (isFlowLabel(label) ? value * FLOW_UNITS[unit].factor : value);
+const fromDisplay = (value, label, unit) => (isFlowLabel(label) ? value / FLOW_UNITS[unit].factor : value);
+
 /* ── Lagrange polynomial interpolation ── */
 function lagrangeInterpolate(dataPoints, xTarget) {
   if (dataPoints.length === 0) return null;
@@ -193,9 +205,15 @@ export default function PureClimaInterpolator() {
   const [inputY, setInputY] = useState('');
   const [queryX, setQueryX] = useState('');
   const [queryResult, setQueryResult] = useState(null);
+  const [flowUnit, setFlowUnit] = useState('ls');
 
   const currentCategory = CATEGORIES[category];
   const currentCurve = currentCategory.curves.find(c => c.id === curveId) || currentCategory.curves[0];
+  const usesFlow = isFlowLabel(currentCurve.xLabel) || isFlowLabel(currentCurve.yLabel);
+  const xLabel = unitLabel(currentCurve.xLabel, flowUnit);
+  const yLabel = unitLabel(currentCurve.yLabel, flowUnit);
+  const dispX = (v) => toDisplay(v, currentCurve.xLabel, flowUnit);
+  const dispY = (v) => toDisplay(v, currentCurve.yLabel, flowUnit);
 
   // Auto-select first curve when category changes
   const handleCategoryChange = (newCategory) => {
@@ -210,15 +228,18 @@ export default function PureClimaInterpolator() {
     const x = parseFloat(inputX);
     const y = parseFloat(inputY);
     if (!isNaN(x) && !isNaN(y)) {
-      setDataPoints([...dataPoints, { x, y }]);
+      setDataPoints([...dataPoints, {
+        x: fromDisplay(x, currentCurve.xLabel, flowUnit),
+        y: fromDisplay(y, currentCurve.yLabel, flowUnit),
+      }]);
       setInputX('');
       setInputY('');
     }
   };
 
   // Remove data point
-  const handleRemovePoint = (index) => {
-    setDataPoints(dataPoints.filter((_, i) => i !== index));
+  const handleRemovePoint = (point) => {
+    setDataPoints(dataPoints.filter((p) => p !== point));
   };
 
   // Query interpolator
@@ -226,8 +247,9 @@ export default function PureClimaInterpolator() {
     const x = parseFloat(queryX);
     if (!isNaN(x) && dataPoints.length >= 2) {
       const sorted = [...dataPoints].sort((a, b) => a.x - b.x);
-      const result = lagrangeInterpolate(sorted, x);
-      setQueryResult({ x, result });
+      const xBase = fromDisplay(x, currentCurve.xLabel, flowUnit);
+      const result = lagrangeInterpolate(sorted, xBase);
+      setQueryResult({ x: xBase, result });
     }
   };
 
@@ -301,6 +323,36 @@ export default function PureClimaInterpolator() {
         </div>
       </div>
 
+      {/* Flow unit selector */}
+      {usesFlow && (
+        <div style={{ marginBottom: '30px' }}>
+          <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#333', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+            Flow Units
+          </label>
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+            {Object.entries(FLOW_UNITS).map(([key, unit]) => (
+              <button
+                key={key}
+                onClick={() => { setFlowUnit(key); setQueryX(''); }}
+                style={{
+                  padding: '10px 16px',
+                  borderRadius: '6px',
+                  border: flowUnit === key ? '2px solid #C05746' : '1px solid #ddd',
+                  background: flowUnit === key ? '#fff' : '#f5f5f5',
+                  color: flowUnit === key ? '#C05746' : '#666',
+                  fontWeight: flowUnit === key ? '600' : '500',
+                  fontSize: '13px',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s',
+                }}
+              >
+                {unit.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Data input */}
       <div style={{ marginBottom: '30px', padding: '20px', background: '#f9f9f9', borderRadius: '8px', border: '1px solid #e0e0e0' }}>
         <label style={{ display: 'block', fontSize: '12px', fontWeight: '600', color: '#333', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
@@ -308,7 +360,7 @@ export default function PureClimaInterpolator() {
         </label>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto auto', gap: '10px', alignItems: 'flex-end' }}>
           <div>
-            <label style={{ display: 'block', fontSize: '12px', color: '#666', marginBottom: '6px' }}>{currentCurve.xLabel}</label>
+            <label style={{ display: 'block', fontSize: '12px', color: '#666', marginBottom: '6px' }}>{xLabel}</label>
             <input
               type="number"
               value={inputX}
@@ -326,7 +378,7 @@ export default function PureClimaInterpolator() {
             />
           </div>
           <div>
-            <label style={{ display: 'block', fontSize: '12px', color: '#666', marginBottom: '6px' }}>{currentCurve.yLabel}</label>
+            <label style={{ display: 'block', fontSize: '12px', color: '#666', marginBottom: '6px' }}>{yLabel}</label>
             <input
               type="number"
               value={inputY}
@@ -381,19 +433,19 @@ export default function PureClimaInterpolator() {
             }}>
               <thead>
                 <tr style={{ background: '#f5f5f5', borderBottom: '1px solid #ddd' }}>
-                  <th style={{ padding: '12px', textAlign: 'left', fontWeight: '600', color: '#666' }}>{currentCurve.xLabel}</th>
-                  <th style={{ padding: '12px', textAlign: 'left', fontWeight: '600', color: '#666' }}>{currentCurve.yLabel}</th>
+                  <th style={{ padding: '12px', textAlign: 'left', fontWeight: '600', color: '#666' }}>{xLabel}</th>
+                  <th style={{ padding: '12px', textAlign: 'left', fontWeight: '600', color: '#666' }}>{yLabel}</th>
                   <th style={{ padding: '12px', width: '50px', textAlign: 'center' }}>Remove</th>
                 </tr>
               </thead>
               <tbody>
                 {sortedDataPoints.map((p, i) => (
                   <tr key={i} style={{ borderBottom: '1px solid #eee', background: i % 2 === 0 ? '#fff' : '#fafafa' }}>
-                    <td style={{ padding: '12px', color: '#333' }}>{p.x.toFixed(2)}</td>
-                    <td style={{ padding: '12px', color: '#333' }}>{p.y.toFixed(2)}</td>
+                    <td style={{ padding: '12px', color: '#333' }}>{dispX(p.x).toFixed(2)}</td>
+                    <td style={{ padding: '12px', color: '#333' }}>{dispY(p.y).toFixed(2)}</td>
                     <td style={{ padding: '12px', textAlign: 'center' }}>
                       <button
-                        onClick={() => handleRemovePoint(sortedDataPoints.indexOf(p))}
+                        onClick={() => handleRemovePoint(p)}
                         style={{
                           padding: '4px 8px',
                           borderRadius: '3px',
@@ -425,7 +477,7 @@ export default function PureClimaInterpolator() {
             Interpolation Curve
           </label>
           <div style={{ overflow: 'auto', background: '#fff', borderRadius: '6px', padding: '10px' }}>
-            <Chart dataPoints={sortedDataPoints} xLabel={currentCurve.xLabel} yLabel={currentCurve.yLabel} />
+            <Chart dataPoints={sortedDataPoints.map(p => ({ x: dispX(p.x), y: dispY(p.y) }))} xLabel={xLabel} yLabel={yLabel} />
           </div>
         </div>
       )}
@@ -439,7 +491,7 @@ export default function PureClimaInterpolator() {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', gap: '10px', alignItems: 'flex-end' }}>
             <div>
               <label style={{ display: 'block', fontSize: '12px', color: '#666', marginBottom: '6px' }}>
-                Enter {currentCurve.xLabel}
+                Enter {xLabel}
               </label>
               <input
                 type="number"
@@ -484,13 +536,13 @@ export default function PureClimaInterpolator() {
                 fontWeight: '500',
                 color: '#333',
               }}>
-                {queryResult.result.toFixed(2)}
+                {dispY(queryResult.result).toFixed(2)}
               </div>
             )}
           </div>
           {queryResult && (
             <div style={{ marginTop: '12px', padding: '12px', background: '#fff', borderRadius: '4px', border: '1px solid #ddd', fontSize: '13px', color: '#333' }}>
-              <strong>Result:</strong> At {currentCurve.xLabel.toLowerCase()} = {queryResult.x.toFixed(2)}, {currentCurve.yLabel.toLowerCase()} = <strong>{queryResult.result.toFixed(2)}</strong>
+              <strong>Result:</strong> At {xLabel} = {dispX(queryResult.x).toFixed(2)}, {yLabel} = <strong>{dispY(queryResult.result).toFixed(2)}</strong>
             </div>
           )}
         </div>
@@ -501,7 +553,7 @@ export default function PureClimaInterpolator() {
         <strong>How to use:</strong><br />
         1. Select your use case (Diffuser, Ductwork, Fan, or Custom)<br />
         2. Choose the curve type relevant to your application<br />
-        3. Add your measured or reference data points<br />
+        3. Choose l/s or m³/h for flow, then add your measured or reference data points<br />
         4. The tool generates a polynomial interpolation curve through your data<br />
         5. Use &lsquo;Interpolate Value&rsquo; to estimate results between your data points
       </div>
